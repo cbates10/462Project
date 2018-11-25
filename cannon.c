@@ -20,9 +20,12 @@ int main(){
 	float globalMatrixB[matrixSize][matrixSize];
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Request request;
+	MPI_Status status;
 	int baseCommunicatorRanks[(int) sqrt(size)];
 	float localmatrixA[matrixSize/(int)sqrt(size)][matrixSize]; // First scatter buffer that holds all the rows a row of processors will need
 	float finalmatrixA[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)]; // Second scatter buffer which contains the matrix partition for the processor
+	float throwAway[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)]; // Second scatter buffer which contains the matrix partition for the processor
 	float localmatrixB[matrixSize/(int)sqrt(size)][matrixSize]; // First scatter buffer that holds all the rows a row of processors will need
 	float finalmatrixB[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)]; // Second scatter buffer which contains the matrix partition for the processor
 	float localresult[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)];
@@ -63,6 +66,8 @@ int main(){
 			}
 		}
 	}
+
+
 	/* This first scatter breaks apart the rows of the globalmatrix and passes the rows that are mapped to a processor to the first processor in the row  */
 	MPI_Scatter(globalMatrixA, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, &localmatrixA, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, 0, column_comm);
 	MPI_Scatter(globalMatrixB, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, &localmatrixB, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, 0, column_comm);
@@ -79,14 +84,15 @@ int main(){
 	recvRankRow = mod((rowRank + 1), rowSize);
 	sendRankCol = mod((colRank - 1), rowSize);
 	recvRankCol = mod((colRank + 1), rowSize);
-	
 	for(int i = 0; i < colRank; i++) {
-		printf("%d", MPI_Send(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankRow, 0, row_comm));
-		printf("%d", MPI_Recv(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankRow, 0, row_comm, MPI_STATUS_IGNORE));	
+		MPI_Isend(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankRow, 0, row_comm, &request);
+		MPI_Recv(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankRow, 0, row_comm, &status);
+		MPI_Wait(&request, &status);	
 	}
 	for(int i = 0; i < rowRank; i++) {
-		MPI_Send(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankCol, 0, column_comm);
-		MPI_Recv(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankCol, 0, column_comm, MPI_STATUS_IGNORE);	
+		MPI_Isend(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankCol, 0, column_comm, &request);
+		MPI_Recv(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankCol, 0, column_comm, &status);
+		MPI_Wait(&request, &status);
 	}
 
 	for(int a = 0; a < rowSize; a++) {
@@ -103,10 +109,12 @@ int main(){
 		}
 
 		if(a < rowSize - 1) {
-			MPI_Send(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankRow, 0, row_comm);
-			MPI_Send(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankCol, 0, column_comm);
-			MPI_Recv(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankCol, 0, column_comm, MPI_STATUS_IGNORE);	
-			MPI_Recv(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankRow, 0, row_comm, MPI_STATUS_IGNORE);	
+			MPI_Isend(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankRow, 0, row_comm, &request);
+			MPI_Recv(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankRow, 0, row_comm, &status);
+			MPI_Wait(&request, &status);	
+			MPI_Isend(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankCol, 0, column_comm, &request);
+			MPI_Recv(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankCol, 0, column_comm, &status);
+			MPI_Wait(&request, &status);	
 		} 
 	}
 
