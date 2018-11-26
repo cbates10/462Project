@@ -124,13 +124,8 @@ int main(){
 	
 	/* Print out the multiplication result on the world root process just to ensure the results match */
 	if(rank == 0) {	
-		printf("Matrix multiplication result is\n");
-		for(int i = 0; i < matrixSize; i++) {
-			for(int y = 0; y < matrixSize; y++) {
-				printf(" %.0lf ", globalResult[i][y]);
-			}
-			printf("\n");
-		}
+		t2 = MPI_Wtime();
+		printf("%lf\n", t2 - t1);
 	} 
 	MPI_Finalize();
 }

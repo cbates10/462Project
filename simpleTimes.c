@@ -3,37 +3,28 @@
 #include <stdlib.h>
 #include <math.h>
 
-int mod(int a, int b) {
-	return ((((a)%(b))+(b))%(b));
-}
-
 int main(){
 	int matrixSize = 256;
 	MPI_Init(NULL, NULL);
 	int rank;
-	int rowRank;
-	int colRank;
 	int size;
-	int rowSize;
-	int colSize;
 	float globalMatrixA[matrixSize][matrixSize];
 	float globalMatrixB[matrixSize][matrixSize];
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	MPI_Request request;
-	MPI_Status status;
+	int baseCommunicatorRanks[(int) sqrt(size)];
 	float localmatrixA[matrixSize/(int)sqrt(size)][matrixSize]; // First scatter buffer that holds all the rows a row of processors will need
 	float finalmatrixA[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)]; // Second scatter buffer which contains the matrix partition for the processor
-	float throwAway[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)]; // Second scatter buffer which contains the matrix partition for the processor
+	float allrowsA[matrixSize/(int)sqrt(size)][matrixSize];
+	float allcolumnsA[matrixSize][matrixSize/(int)sqrt(size)];
 	float localmatrixB[matrixSize/(int)sqrt(size)][matrixSize]; // First scatter buffer that holds all the rows a row of processors will need
 	float finalmatrixB[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)]; // Second scatter buffer which contains the matrix partition for the processor
+	float allrowsB[matrixSize/(int)sqrt(size)][matrixSize];
+	float allcolumnsB[matrixSize][matrixSize/(int)sqrt(size)];
 	float localresult[matrixSize/(int)sqrt(size)][matrixSize/(int)sqrt(size)];
 	float rowresult[matrixSize/(int)sqrt(size)][matrixSize];
 	float globalResult[matrixSize][matrixSize];
-	int sendRankRow;
-	int recvRankRow;
-	int sendRankCol;
-	int recvRankCol;
+	float testResult[matrixSize][matrixSize];
 
 	double t1, t2;
 	
@@ -45,11 +36,8 @@ int main(){
  	 * in the same row and same column */
 	MPI_Comm_split(MPI_COMM_WORLD, rowColor, rank, &row_comm);
 	MPI_Comm_split(MPI_COMM_WORLD, columnColor, rank, &column_comm);
-	MPI_Comm_size(row_comm, &rowSize);
-	MPI_Comm_rank(row_comm, &rowRank);
-	MPI_Comm_size(column_comm, &colSize);
-	MPI_Comm_rank(column_comm, &colRank);
-	MPI_Buffer_attach(malloc(((matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)))*sizeof(float) + 100), (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size))*sizeof(float) + 100);
+
+		
 	/* Initialize the matrices with "random" numbers */	
 	if(rank == 0){
 		int subMatrixDimension = matrixSize / size;
@@ -57,16 +45,14 @@ int main(){
 		int columnIndex;
 		t1 = MPI_Wtime();
 		srand(0);
-
 		for(int i = 0; i < matrixSize; i++){
 			for(int y = 0; y < matrixSize; y++){
 				globalMatrixA[i][y] = ((float)rand() / (float)RAND_MAX) * 2 - 1;
 				globalMatrixB[i][y] = ((float)rand() / (float)RAND_MAX) * 2 - 1;
 			}
 		}
+		
 	}
-
-
 	/* This first scatter breaks apart the rows of the globalmatrix and passes the rows that are mapped to a processor to the first processor in the row  */
 	MPI_Scatter(globalMatrixA, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, &localmatrixA, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, 0, column_comm);
 	MPI_Scatter(globalMatrixB, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, &localmatrixB, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, 0, column_comm);
@@ -77,40 +63,23 @@ int main(){
 		MPI_Scatter(localmatrixB[i], matrixSize/(int)sqrt(size), MPI_FLOAT, &finalmatrixB[i], matrixSize/(int)sqrt(size), MPI_FLOAT, 0, row_comm);
 	}
 
-	/* Perform initial alignment */
-
-	sendRankRow = mod((rowRank - 1), rowSize);
-	recvRankRow = mod((rowRank + 1), rowSize);
-	sendRankCol = mod((colRank - 1), colSize);
-	recvRankCol = mod((colRank + 1), colSize);
-	for(int i = 0; i < colRank; i++) {
-		MPI_Bsend(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankRow, 0, row_comm);
-		MPI_Recv(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankRow, 0, row_comm, MPI_STATUS_IGNORE);	
+	/* All of the row pieces scattered among the processors are gathered up on each processor in a row group. This is done for matrix A as the multiplication will be done
+ 	 * by multiplying the rows of A with the columns of B */	
+	for(int i = 0; i < matrixSize/(int)sqrt(size); i++){
+		MPI_Allgather(finalmatrixA[i], (matrixSize/(int)sqrt(size)), MPI_FLOAT, &allrowsA[i], (matrixSize/(int)sqrt(size)), MPI_FLOAT, row_comm); 
 	}
-	for(int i = 0; i < rowRank; i++) {
-		MPI_Bsend(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankCol, 0, column_comm);
-		MPI_Recv(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankCol, 0, column_comm, MPI_STATUS_IGNORE);
-	}
+	
+	/* Gather up all the columns pieces in a column on each processor in that column */
+	MPI_Allgather(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, &allcolumnsB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, column_comm);
 
-	for(int a = 0; a < rowSize; a++) {
-		/* Compute the values of the matrix multiplication locally on the processor */
-		for(int i = 0; i < matrixSize/(int)sqrt(size); i++) {
-			for(int y = 0; y < matrixSize/(int)sqrt(size); y++) {
-				if(a == 0) {
-					localresult[i][y] = 0;
-				}
-				for(int z = 0; z < matrixSize/(int)sqrt(size); z++) {
-					localresult[i][y] += (finalmatrixA[i][z] * finalmatrixB[z][y]);
-				}
+	/* Compute the values of the matrix multiplication locally on the processor */
+	for(int i = 0; i < matrixSize/(int)sqrt(size); i++) {
+		for(int y = 0; y < matrixSize/(int)sqrt(size); y++) {
+			localresult[i][y] = 0;
+			for(int z = 0; z < matrixSize; z++) {
+				localresult[i][y] += (allrowsA[i][z] * allcolumnsB[z][y]);
 			}
 		}
-
-		if(a < rowSize - 1) {
-			MPI_Bsend(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankRow, 0, row_comm);
-			MPI_Recv(finalmatrixA, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankRow, 0, row_comm, MPI_STATUS_IGNORE);
-			MPI_Bsend(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, sendRankCol, 0, column_comm);
-			MPI_Recv(finalmatrixB, (matrixSize/(int)sqrt(size))*(matrixSize/(int)sqrt(size)), MPI_FLOAT, recvRankCol, 0, column_comm, MPI_STATUS_IGNORE);
-		} 
 	}
 
 	/* With the local result calculated reverse the scatter process and gather up the results */
@@ -120,17 +89,12 @@ int main(){
 	}
 	
 	/* At this point each row group processor contains all the multiplication results for that row partition. Gather up these results on the root process using the column communicator */
-	MPI_Gather(rowresult, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, &globalResult, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, 0, column_comm);
+	MPI_Gather(rowresult, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, &testResult, (matrixSize*matrixSize)/(int)sqrt(size), MPI_FLOAT, 0, column_comm);
 	
 	/* Print out the multiplication result on the world root process just to ensure the results match */
-	if(rank == 0) {	
-		printf("Matrix multiplication result is\n");
-		for(int i = 0; i < matrixSize; i++) {
-			for(int y = 0; y < matrixSize; y++) {
-				printf(" %.0lf ", globalResult[i][y]);
-			}
-			printf("\n");
-		}
-	} 
+	if(rank == 0) {
+		t2 = MPI_Wtime();
+		printf("%lf\n", t2 - t1);
+	}
 	MPI_Finalize();
 }
